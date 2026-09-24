@@ -3,7 +3,7 @@ import { authenticate } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/errors.js';
 import * as tasks from './tasks.service.js';
-import { createTaskSchema, updateTaskSchema, listTasksSchema, idParam } from './tasks.schemas.js';
+import { createTaskSchema, updateTaskSchema, listTasksSchema, idParam, calendarSchema, analyticsSchema } from './tasks.schemas.js';
 
 const router = Router();
 router.use(authenticate);
@@ -59,6 +59,40 @@ router.post('/', validate({ body: createTaskSchema }), asyncHandler(async (req, 
  */
 router.get('/stats', asyncHandler(async (req, res) => {
   res.json(await tasks.getStats(req.user));
+}));
+
+/**
+ * @openapi
+ * /tasks/calendar:
+ *   get:
+ *     tags: [Tasks]
+ *     summary: Tasks due within a date range (max 62 days), for the calendar view
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: from, required: true, schema: { type: string, format: date-time } }
+ *       - { in: query, name: to, required: true, schema: { type: string, format: date-time }, description: Exclusive upper bound }
+ *     responses:
+ *       200: { description: Tasks, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Task' } } } } }
+ *       400: { description: Invalid or too-large range }
+ */
+router.get('/calendar', validate({ query: calendarSchema }), asyncHandler(async (req, res) => {
+  res.json(await tasks.getCalendar(req.user, req.query));
+}));
+
+/**
+ * @openapi
+ * /tasks/analytics:
+ *   get:
+ *     tags: [Tasks]
+ *     summary: Daily created/completed series, cycle time, workload per assignee, open tasks by priority
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: query, name: days, schema: { type: integer, enum: [7, 30, 90], default: 30 } }
+ *     responses:
+ *       200: { description: Analytics payload }
+ */
+router.get('/analytics', validate({ query: analyticsSchema }), asyncHandler(async (req, res) => {
+  res.json(await tasks.getAnalytics(req.user, req.query));
 }));
 
 /**
