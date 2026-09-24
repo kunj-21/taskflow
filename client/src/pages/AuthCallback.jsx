@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth.jsx';
+import { Spinner } from '../components/ui.jsx';
 
 // Landing page after Google OAuth: the server already set the refresh cookie, so just resume.
 export default function AuthCallback() {
@@ -11,5 +12,5 @@ export default function AuthCallback() {
     resume().then(() => navigate('/', { replace: true }), () => navigate('/login?error=oauth', { replace: true }));
   }, [resume, navigate]);
 
-  return <div className="center muted">Signing you in…</div>;
+  return <div className="center" role="status"><Spinner />Signing you in…</div>;
 }
