@@ -1,18 +1,18 @@
 // Unit tests: no database or Redis required.
 import { describe, it, expect, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { authenticate, authorize } from '../src/middleware/auth.js';
+import { authenticate, requireRole, atLeast } from '../src/middleware/auth.js';
 import { validate } from '../src/middleware/validate.js';
 import { listTasksSchema, updateTaskSchema } from '../src/modules/tasks/tasks.schemas.js';
 
-const token = (role) => jwt.sign({ sub: 'u1', role, email: 'a@b.c' }, process.env.JWT_ACCESS_SECRET, { expiresIn: '1m' });
+const token = () => jwt.sign({ sub: 'u1', email: 'a@b.c' }, process.env.JWT_ACCESS_SECRET, { expiresIn: '1m' });
 const run = (mw, req) => new Promise((resolve) => mw(req, {}, resolve));
 
 describe('authenticate', () => {
   it('attaches the user for a valid token', async () => {
-    const req = { headers: { authorization: `Bearer ${token('MEMBER')}` } };
+    const req = { headers: { authorization: `Bearer ${token()}` } };
     expect(await run(authenticate, req)).toBeUndefined();
-    expect(req.user).toMatchObject({ id: 'u1', role: 'MEMBER' });
+    expect(req.user).toEqual({ id: 'u1', email: 'a@b.c' });
   });
 
   it('rejects missing and tampered tokens', async () => {
@@ -22,11 +22,20 @@ describe('authenticate', () => {
   });
 });
 
-describe('authorize (RBAC)', () => {
-  it('allows listed roles and forbids others', async () => {
-    const mw = authorize('ADMIN', 'MANAGER');
-    expect(await run(mw, { user: { role: 'MANAGER' } })).toBeUndefined();
-    expect((await run(mw, { user: { role: 'MEMBER' } })).status).toBe(403);
+describe('org roles (RBAC)', () => {
+  it('ranks roles owner > admin > manager > member', () => {
+    expect(atLeast('OWNER', 'ADMIN')).toBe(true);
+    expect(atLeast('ADMIN', 'MANAGER')).toBe(true);
+    expect(atLeast('MANAGER', 'ADMIN')).toBe(false);
+    expect(atLeast('MEMBER', 'MANAGER')).toBe(false);
+  });
+
+  it('requireRole allows the minimum role and above', async () => {
+    const mw = requireRole('MANAGER');
+    expect(await run(mw, { membership: { role: 'OWNER' } })).toBeUndefined();
+    expect(await run(mw, { membership: { role: 'MANAGER' } })).toBeUndefined();
+    expect((await run(mw, { membership: { role: 'MEMBER' } })).status).toBe(403);
+    expect((await run(mw, {})).status).toBe(401);
   });
 });
 

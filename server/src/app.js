@@ -15,7 +15,8 @@ import { apiLimiter } from './middleware/rateLimit.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { swaggerSpec } from './docs/swagger.js';
 import authRoutes from './modules/auth/auth.routes.js';
-import userRoutes from './modules/users/users.routes.js';
+import { orgsRouter, orgRouter, invitationsRouter } from './modules/orgs/orgs.routes.js';
+import projectRoutes from './modules/projects/projects.routes.js';
 import taskRoutes from './modules/tasks/tasks.routes.js';
 
 export function createApp() {
@@ -50,7 +51,10 @@ export function createApp() {
   const v1 = express.Router();
   v1.use(apiLimiter);
   v1.use('/auth', authRoutes);
-  v1.use('/users', userRoutes);
+  v1.use('/orgs', orgsRouter);
+  v1.use('/org', orgRouter);
+  v1.use('/invitations', invitationsRouter);
+  v1.use('/projects', projectRoutes);
   v1.use('/tasks', taskRoutes);
   app.use('/api/v1', v1);
 

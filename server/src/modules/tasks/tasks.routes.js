@@ -1,12 +1,13 @@
 import { Router } from 'express';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requireOrg } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
 import { asyncHandler } from '../../utils/errors.js';
 import * as tasks from './tasks.service.js';
-import { createTaskSchema, updateTaskSchema, listTasksSchema, idParam, calendarSchema, analyticsSchema } from './tasks.schemas.js';
+import { audit } from '../audit/audit.service.js';
+import { createTaskSchema, updateTaskSchema, listTasksSchema, idParam, calendarSchema, analyticsSchema, statsSchema } from './tasks.schemas.js';
 
 const router = Router();
-router.use(authenticate);
+router.use(authenticate, requireOrg);
 
 /**
  * @openapi
@@ -16,6 +17,8 @@ router.use(authenticate);
  *     summary: List tasks visible to the current user (paginated, filterable, cached)
  *     security: [{ bearerAuth: [] }]
  *     parameters:
+ *       - { in: header, name: X-Org-Id, required: true, schema: { type: string } }
+ *       - { in: query, name: projectId, schema: { type: string } }
  *       - { in: query, name: page, schema: { type: integer, default: 1 } }
  *       - { in: query, name: limit, schema: { type: integer, default: 20, maximum: 100 } }
  *       - { in: query, name: status, schema: { type: string, enum: [TODO, IN_PROGRESS, REVIEW, DONE] } }
@@ -40,11 +43,11 @@ router.use(authenticate);
  *       403: { description: Not allowed to assign to that user }
  */
 router.get('/', validate({ query: listTasksSchema }), asyncHandler(async (req, res) => {
-  res.json(await tasks.listTasks(req.user, req.query));
+  res.json(await tasks.listTasks(req, req.query));
 }));
 
 router.post('/', validate({ body: createTaskSchema }), asyncHandler(async (req, res) => {
-  res.status(201).json(await tasks.createTask(req.user, req.body));
+  res.status(201).json(await tasks.createTask(req, req.body));
 }));
 
 /**
@@ -57,8 +60,8 @@ router.post('/', validate({ body: createTaskSchema }), asyncHandler(async (req, 
  *     responses:
  *       200: { description: Stats }
  */
-router.get('/stats', asyncHandler(async (req, res) => {
-  res.json(await tasks.getStats(req.user));
+router.get('/stats', validate({ query: statsSchema }), asyncHandler(async (req, res) => {
+  res.json(await tasks.getStats(req, req.query));
 }));
 
 /**
@@ -69,6 +72,7 @@ router.get('/stats', asyncHandler(async (req, res) => {
  *     summary: Tasks due within a date range (max 62 days), for the calendar view
  *     security: [{ bearerAuth: [] }]
  *     parameters:
+ *       - { in: header, name: X-Org-Id, required: true, schema: { type: string } }
  *       - { in: query, name: from, required: true, schema: { type: string, format: date-time } }
  *       - { in: query, name: to, required: true, schema: { type: string, format: date-time }, description: Exclusive upper bound }
  *     responses:
@@ -76,7 +80,7 @@ router.get('/stats', asyncHandler(async (req, res) => {
  *       400: { description: Invalid or too-large range }
  */
 router.get('/calendar', validate({ query: calendarSchema }), asyncHandler(async (req, res) => {
-  res.json(await tasks.getCalendar(req.user, req.query));
+  res.json(await tasks.getCalendar(req, req.query));
 }));
 
 /**
@@ -87,12 +91,13 @@ router.get('/calendar', validate({ query: calendarSchema }), asyncHandler(async 
  *     summary: Daily created/completed series, cycle time, workload per assignee, open tasks by priority
  *     security: [{ bearerAuth: [] }]
  *     parameters:
+ *       - { in: header, name: X-Org-Id, required: true, schema: { type: string } }
  *       - { in: query, name: days, schema: { type: integer, enum: [7, 30, 90], default: 30 } }
  *     responses:
  *       200: { description: Analytics payload }
  */
 router.get('/analytics', validate({ query: analyticsSchema }), asyncHandler(async (req, res) => {
-  res.json(await tasks.getAnalytics(req.user, req.query));
+  res.json(await tasks.getAnalytics(req, req.query));
 }));
 
 /**
@@ -126,15 +131,16 @@ router.get('/analytics', validate({ query: analyticsSchema }), asyncHandler(asyn
  *       204: { description: Deleted }
  */
 router.get('/:id', validate({ params: idParam }), asyncHandler(async (req, res) => {
-  res.json(await tasks.getTask(req.user, req.params.id));
+  res.json(await tasks.getTask(req, req.params.id));
 }));
 
 router.patch('/:id', validate({ params: idParam, body: updateTaskSchema }), asyncHandler(async (req, res) => {
-  res.json(await tasks.updateTask(req.user, req.params.id, req.body));
+  res.json(await tasks.updateTask(req, req.params.id, req.body));
 }));
 
 router.delete('/:id', validate({ params: idParam }), asyncHandler(async (req, res) => {
-  await tasks.deleteTask(req.user, req.params.id);
+  const task = await tasks.deleteTask(req, req.params.id);
+  await audit(req, { action: 'task.deleted', entityType: 'task', entityId: task.id, metadata: { key: `${task.project.key}-${task.number}`, title: task.title } });
   res.status(204).end();
 }));
 

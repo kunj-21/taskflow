@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowsClockwise, CheckCircle, PlusCircle, Timer } from '@phosphor-icons/react';
-import { api } from '../api.js';
+import { api, toQuery } from '../api.js';
+import ProjectSelect, { useProjectFilter } from '../components/ProjectSelect.jsx';
 import { canManage, useAuth } from '../auth.jsx';
 import { PRIORITIES, PRIORITY_LABEL, STATUSES, STATUS_META } from '../constants.js';
 import { ChartCard, ColumnChart, DataTable, Legend, LineChart, StackedBars } from '../components/charts.jsx';
@@ -22,7 +23,8 @@ const fmtDay = (iso, long) => new Date(`${iso}T00:00:00Z`).toLocaleDateString(un
 export default function Analytics() {
   const { user } = useAuth();
   const [days, setDays] = useState(30);
-  const q = useQuery({ queryKey: ['tasks', 'analytics', days], queryFn: () => api(`/tasks/analytics?days=${days}`), placeholderData: (p) => p });
+  const [projectId, setProjectId] = useProjectFilter();
+  const q = useQuery({ queryKey: ['tasks', 'analytics', days, projectId], queryFn: () => api(`/tasks/analytics${toQuery({ days, projectId })}`), placeholderData: (p) => p });
   const a = q.data;
 
   const workloadRows = a?.workload.map((w) => ({ ...w, name: w.user?.name || 'Unassigned' })) || [];
@@ -44,7 +46,10 @@ export default function Analytics() {
           <h1>Analytics</h1>
           <p>{canManage(user) ? 'Throughput and workload across the whole team.' : 'Your throughput and workload.'} Days are in UTC.</p>
         </div>
-        {rangePicker}
+        <div className="head-controls">
+          <ProjectSelect value={projectId} onChange={setProjectId} />
+          {rangePicker}
+        </div>
       </div>
 
       {q.error && <div className="alert alert-error" role="alert">Couldn’t load analytics: {q.error.message}</div>}

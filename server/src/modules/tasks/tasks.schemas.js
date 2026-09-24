@@ -12,13 +12,14 @@ const taskFields = {
   assigneeId: z.string().nullable().optional(),
 };
 
-export const createTaskSchema = z.object(taskFields);
+export const createTaskSchema = z.object({ ...taskFields, projectId: z.string().min(1) });
 
 export const updateTaskSchema = z
-  .object({ ...taskFields, title: taskFields.title.optional() })
+  .object({ ...taskFields, title: taskFields.title.optional(), projectId: z.string().min(1).optional() })
   .refine((v) => Object.keys(v).length > 0, 'At least one field is required');
 
 export const listTasksSchema = z.object({
+  projectId: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   status: z.enum(STATUSES).optional(),
@@ -35,10 +36,13 @@ export const idParam = z.object({ id: z.string().min(1) });
 
 const MAX_CALENDAR_DAYS = 62;
 export const calendarSchema = z
-  .object({ from: z.coerce.date(), to: z.coerce.date() })
+  .object({ from: z.coerce.date(), to: z.coerce.date(), projectId: z.string().optional() })
   .refine((v) => v.to > v.from, { message: '`to` must be after `from`', path: ['to'] })
   .refine((v) => v.to - v.from <= MAX_CALENDAR_DAYS * 86400_000, { message: `Range can be at most ${MAX_CALENDAR_DAYS} days`, path: ['to'] });
 
 export const analyticsSchema = z.object({
+  projectId: z.string().optional(),
   days: z.coerce.number().int().refine((d) => [7, 30, 90].includes(d), 'days must be 7, 30 or 90').default(30),
 });
+
+export const statsSchema = z.object({ projectId: z.string().optional() });
