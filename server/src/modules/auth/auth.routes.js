@@ -9,6 +9,8 @@ import { validate } from '../../middleware/validate.js';
 import { authenticate } from '../../middleware/auth.js';
 import { authLimiter } from '../../middleware/rateLimit.js';
 import * as auth from './auth.service.js';
+import { audit } from '../audit/audit.service.js';
+import { listMyOrganizations } from '../orgs/orgs.service.js';
 
 const router = Router();
 
@@ -22,7 +24,7 @@ const cookieOpts = (expires) => ({
 
 function sendSession(res, session, status = 200) {
   res.cookie(auth.REFRESH_COOKIE, session.refresh.token, cookieOpts(session.refresh.expiresAt));
-  res.status(status).json({ accessToken: session.accessToken, user: session.user });
+  res.status(status).json({ accessToken: session.accessToken, user: session.user, organizations: session.organizations });
 }
 
 if (env.googleEnabled) {
@@ -35,11 +37,13 @@ if (env.googleEnabled) {
 }
 
 const registerSchema = z.object({
-  email: z.string().email().toLowerCase(),
-  name: z.string().min(1).max(80),
+  email: z.string().trim().email().toLowerCase(),
+  name: z.string().trim().min(1).max(80),
   password: z.string().min(8).max(128),
+  orgName: z.string().trim().min(2).max(80).optional(),
+  inviteToken: z.string().min(10).max(200).optional(),
 });
-const loginSchema = z.object({ email: z.string().email().toLowerCase(), password: z.string().min(1) });
+const loginSchema = z.object({ email: z.string().trim().email().toLowerCase(), password: z.string().min(1) });
 
 /**
  * @openapi
@@ -57,7 +61,13 @@ const loginSchema = z.object({ email: z.string().email().toLowerCase(), password
  *       409: { description: Email already registered }
  */
 router.post('/register', authLimiter, validate({ body: registerSchema }), asyncHandler(async (req, res) => {
-  sendSession(res, await auth.register(req.body), 201);
+  const session = await auth.register(req.body);
+  const orgId = session.joined.orgId || session.joined.id;
+  req.user = { id: session.user.id };
+  await audit(req, req.body.inviteToken
+    ? { orgId, action: 'member.joined', entityType: 'user', entityId: session.user.id, metadata: { email: session.user.email, role: session.joined.role } }
+    : { orgId, action: 'org.created', entityType: 'organization', entityId: orgId, metadata: { name: session.joined.name } });
+  sendSession(res, session, 201);
 }));
 
 /**
@@ -126,7 +136,7 @@ router.post('/logout', asyncHandler(async (req, res) => {
 router.get('/me', authenticate, asyncHandler(async (req, res) => {
   const user = await prisma.user.findUnique({ where: { id: req.user.id } });
   if (!user) throw ApiError.notFound('User not found');
-  res.json(auth.publicUser(user));
+  res.json({ ...auth.publicUser(user), organizations: await listMyOrganizations(user.id) });
 }));
 
 router.get('/providers', (_req, res) => res.json({ google: env.googleEnabled }));

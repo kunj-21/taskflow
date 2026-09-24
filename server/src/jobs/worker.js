@@ -24,17 +24,24 @@ const processors = {
     return 'sent';
   },
 
+  // One report per organization, sent to its managers, admins and owners.
   [QUEUES.REPORTS]: async () => {
     const since = new Date(Date.now() - 7 * 86400_000);
-    const [created, completed, overdue, recipients] = await Promise.all([
-      prisma.task.count({ where: { createdAt: { gte: since } } }),
-      prisma.task.count({ where: { status: 'DONE', updatedAt: { gte: since } } }),
-      prisma.task.count({ where: { status: { not: 'DONE' }, dueDate: { lt: new Date() } } }),
-      prisma.user.findMany({ where: { role: { in: ['ADMIN', 'MANAGER'] } }, select: { email: true } }),
-    ]);
-    const text = `Weekly TaskFlow report\n\nCreated: ${created}\nCompleted: ${completed}\nOverdue now: ${overdue}`;
-    await emailQueue.addBulk(recipients.map(({ email }) => ({ name: 'send', data: { to: email, subject: 'Your weekly TaskFlow report', text } })));
-    return { created, completed, overdue, recipients: recipients.length };
+    const orgs = await prisma.organization.findMany({ select: { id: true, name: true } });
+    let sent = 0;
+    for (const org of orgs) {
+      const [created, completed, overdue, recipients] = await Promise.all([
+        prisma.task.count({ where: { orgId: org.id, createdAt: { gte: since } } }),
+        prisma.task.count({ where: { orgId: org.id, completedAt: { gte: since } } }),
+        prisma.task.count({ where: { orgId: org.id, status: { not: 'DONE' }, dueDate: { lt: new Date() } } }),
+        prisma.membership.findMany({ where: { orgId: org.id, role: { in: ['OWNER', 'ADMIN', 'MANAGER'] } }, select: { user: { select: { email: true } } } }),
+      ]);
+      if (!recipients.length) continue;
+      const text = `Weekly TaskFlow report for ${org.name}\n\nCreated: ${created}\nCompleted: ${completed}\nOverdue now: ${overdue}`;
+      await emailQueue.addBulk(recipients.map(({ user }) => ({ name: 'send', data: { to: user.email, subject: `${org.name}: your weekly TaskFlow report`, text } })));
+      sent += recipients.length;
+    }
+    return { orgs: orgs.length, emails: sent };
   },
 };
 

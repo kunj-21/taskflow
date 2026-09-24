@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { ArrowsClockwise, Bell, EnvelopeSimple, Eye, EyeSlash, Lightning, LockSimple, ShieldCheck, User, WarningCircle } from '@phosphor-icons/react';
+import { ArrowsClockwise, Buildings, EnvelopeSimple, Eye, EyeSlash, Lightning, LockSimple, ShieldCheck, User, UsersThree, WarningCircle } from '@phosphor-icons/react';
 import { useAuth } from '../auth.jsx';
 import { api } from '../api.js';
 import { Logo } from '../components/Layout.jsx';
@@ -10,6 +10,7 @@ const DEMO = [
   { label: 'Admin', email: 'admin@taskflow.dev' },
   { label: 'Manager', email: 'manager@taskflow.dev' },
   { label: 'Member', email: 'member@taskflow.dev' },
+  { label: 'Other company', email: 'globex@taskflow.dev' },
 ];
 
 // Official multi-color Google "G" mark.
@@ -25,8 +26,9 @@ const GoogleG = () => (
 export default function Login() {
   const { user, login, register } = useAuth();
   const [params] = useSearchParams();
-  const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const invite = params.get('invite');
+  const [mode, setMode] = useState(params.get('mode') === 'register' ? 'register' : 'login');
+  const [form, setForm] = useState({ name: '', email: params.get('email') || '', password: '', orgName: '' });
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState(params.get('error') ? 'Google sign-in didn’t complete. Please try again.' : '');
   const [busy, setBusy] = useState(false);
@@ -34,7 +36,8 @@ export default function Login() {
 
   useEffect(() => { api('/auth/providers').then((p) => setGoogle(p.google)).catch(() => {}); }, []);
 
-  if (user) return <Navigate to="/" replace />;
+  // Signing in with an invite continues to the accept screen; signing up with one already joined.
+  if (user) return <Navigate to={invite && mode === 'login' ? `/invite/${invite}` : '/'} replace />;
 
   const isLogin = mode === 'login';
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -44,8 +47,12 @@ export default function Login() {
     setBusy(true);
     setError('');
     try {
-      if (isLogin) await login(form.email, form.password);
-      else await register(form.name, form.email, form.password);
+      if (isLogin) {
+        await login(form.email, form.password);
+      } else {
+        const { name, email, password, orgName } = form;
+        await register(invite ? { name, email, password, inviteToken: invite } : { name, email, password, orgName });
+      }
     } catch (err) {
       setError(err.details ? Object.entries(err.details).map(([k, v]) => `${k}: ${[].concat(v).join(', ')}`).join(' · ') : err.message);
       setBusy(false);
@@ -60,9 +67,9 @@ export default function Login() {
           <h1>Plan, assign and ship — together.</h1>
           <p className="lead">TaskFlow keeps your team’s work in one live board, so everyone knows what’s next.</p>
           <ul className="features">
-            <li><span className="fi"><Lightning size={18} weight="fill" /></span>Real-time updates across every device</li>
-            <li><span className="fi"><ShieldCheck size={18} weight="fill" /></span>Role-based access for admins, managers and members</li>
-            <li><span className="fi"><Bell size={18} weight="fill" /></span>Automatic due-date reminders and weekly reports</li>
+            <li><span className="fi"><ShieldCheck size={18} weight="fill" /></span>A private, isolated workspace for every organization</li>
+            <li><span className="fi"><UsersThree size={18} weight="fill" /></span>Owner, admin, manager and member roles with a full audit log</li>
+            <li><span className="fi"><Lightning size={18} weight="fill" /></span>Real-time updates, reminders and weekly reports</li>
           </ul>
         </div>
         <div className="preview">
@@ -74,9 +81,14 @@ export default function Login() {
       <main className="auth-form-wrap">
         <form className="auth-form" onSubmit={submit}>
           <div>
-            <h2>{isLogin ? 'Welcome back' : 'Create your account'}</h2>
-            <p className="muted" style={{ marginTop: 6 }}>{isLogin ? 'Sign in to your workspace to continue.' : 'Start organizing your team’s work in minutes.'}</p>
+            <h2>{isLogin ? 'Welcome back' : invite ? 'Create your account' : 'Start your organization'}</h2>
+            <p className="muted" style={{ marginTop: 6 }}>
+              {isLogin ? 'Sign in to your workspace to continue.' : invite ? 'Create an account to accept your invitation.' : 'Set up a workspace for your company. You can invite your team next.'}
+            </p>
           </div>
+          {invite && (
+            <div className="notice"><UsersThree size={18} aria-hidden="true" />{isLogin ? 'Sign in to accept your invitation.' : 'You’ll join the team that invited you.'}</div>
+          )}
 
           {google && (
             <>
@@ -95,11 +107,21 @@ export default function Login() {
             </div>
           )}
 
+          {!isLogin && !invite && (
+            <div className="field">
+              <label htmlFor="orgName">Company name</label>
+              <div className="input-wrap">
+                <Buildings size={18} aria-hidden="true" />
+                <input id="orgName" className="input" autoComplete="organization" value={form.orgName} onChange={set('orgName')} placeholder="e.g. Acme Corp" required minLength={2} />
+              </div>
+            </div>
+          )}
+
           <div className="field">
             <label htmlFor="email">Email</label>
             <div className="input-wrap">
               <EnvelopeSimple size={18} aria-hidden="true" />
-              <input id="email" className="input" type="email" autoComplete="email" inputMode="email" value={form.email} onChange={set('email')} placeholder="you@company.com" required />
+              <input id="email" className="input" type="email" autoComplete="email" inputMode="email" value={form.email} onChange={set('email')} placeholder="you@company.com" required readOnly={Boolean(invite)} />
             </div>
           </div>
 
@@ -126,11 +148,11 @@ export default function Login() {
           <p className="switch-mode">
             {isLogin ? 'New to TaskFlow?' : 'Already have an account?'}
             <button type="button" className="link-btn" onClick={() => { setMode(isLogin ? 'register' : 'login'); setError(''); }}>
-              {isLogin ? 'Create an account' : 'Sign in'}
+              {isLogin ? (invite ? 'Create an account' : 'Start a free organization') : 'Sign in'}
             </button>
           </p>
 
-          {isLogin && (
+          {isLogin && !invite && (
             <div className="demo">
               <strong>Try a demo account</strong> — password <code>password123</code>
               <div className="demo-list">

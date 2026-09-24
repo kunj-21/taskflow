@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Info, Trash, WarningCircle } from '@phosphor-icons/react';
 import { api } from '../api.js';
 import { canManage, useAuth } from '../auth.jsx';
 import { PRIORITIES, PRIORITY_LABEL, STATUSES, STATUS_META } from '../constants.js';
 import { Avatar, Modal, Spinner } from './ui.jsx';
+import { taskKey, useMembers, useProjects } from '../hooks.js';
 
 export const toInputDate = (d) => {
   if (!d) return '';
@@ -12,7 +13,7 @@ export const toInputDate = (d) => {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 };
 
-export default function TaskModal({ task, defaults = {}, users, onClose, onSaved }) {
+export default function TaskModal({ task, defaults = {}, onClose, onSaved }) {
   const { user } = useAuth();
   const isNew = !task;
   const manager = canManage(user);
@@ -27,7 +28,15 @@ export default function TaskModal({ task, defaults = {}, users, onClose, onSaved
     priority: task?.priority || 'MEDIUM',
     dueDate: task ? toInputDate(task.dueDate) : defaults.dueDate || '',
     assigneeId: task ? task.assigneeId ?? '' : user.id,
+    projectId: task?.projectId || defaults.projectId || '',
   });
+  const members = useMembers(manager);
+  const projects = useProjects();
+
+  // New task with no project chosen yet: default to the first active project once they load.
+  useEffect(() => {
+    if (isNew && !form.projectId && projects.data?.length) setForm((f) => ({ ...f, projectId: projects.data[0].id }));
+  }, [isNew, form.projectId, projects.data]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [titleError, setTitleError] = useState('');
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -43,6 +52,7 @@ export default function TaskModal({ task, defaults = {}, users, onClose, onSaved
           priority: form.priority,
           dueDate: form.dueDate ? new Date(`${form.dueDate}T17:00:00`).toISOString() : null,
           assigneeId: form.assigneeId || null,
+          ...(isNew && { projectId: form.projectId }),
         };
       return isNew ? api('/tasks', { method: 'POST', body }) : api(`/tasks/${task.id}`, { method: 'PATCH', body });
     },
@@ -63,12 +73,12 @@ export default function TaskModal({ task, defaults = {}, users, onClose, onSaved
     save.mutate();
   }
 
-  const assignees = manager ? users || [] : [user];
+  const assignees = manager ? members.data || [] : [user];
   const error = save.error || remove.error;
 
   return (
     <Modal
-      title={isNew ? 'New task' : statusOnly ? 'Update status' : 'Edit task'}
+      title={isNew ? 'New task' : `${statusOnly ? 'Update' : 'Edit'} ${taskKey(task)}`}
       onClose={onClose}
     >
       <form onSubmit={submit} noValidate>
@@ -76,6 +86,18 @@ export default function TaskModal({ task, defaults = {}, users, onClose, onSaved
           {statusOnly && (
             <div className="notice"><Info size={18} aria-hidden="true" />Assigned to you by {task.creator?.name}. You can update its status.</div>
           )}
+
+          <div className="field">
+            <label htmlFor="task-project">Project</label>
+            {isNew ? (
+              <select id="task-project" className="select" value={form.projectId} onChange={set('projectId')} required>
+                {!projects.data?.length && <option value="">No active projects</option>}
+                {projects.data?.map((p) => <option key={p.id} value={p.id}>{p.key} · {p.name}</option>)}
+              </select>
+            ) : (
+              <input id="task-project" className="input" value={`${task.project.key} · ${task.project.name}`} readOnly />
+            )}
+          </div>
 
           <div className="field">
             <label htmlFor="task-title">Title<span className="req" aria-hidden="true">*</span></label>

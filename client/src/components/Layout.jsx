@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Link, NavLink, Outlet } from 'react-router-dom';
-import { ArrowSquareOut, CalendarDots, ChartLineUp, CheckSquareOffset, Desktop, FileCode, Kanban, Moon, SignOut, Sun, UsersThree } from '@phosphor-icons/react';
-import { useAuth } from '../auth.jsx';
+import { useEffect, useRef, useState } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import {
+  ArrowSquareOut, CalendarDots, CaretUpDown, ChartLineUp, Check, CheckSquareOffset, ClockCounterClockwise,
+  Desktop, FileCode, FolderSimple, GearSix, Kanban, List, Moon, Plus, SignOut, Sun, UsersThree, X,
+} from '@phosphor-icons/react';
+import { isAdmin, ROLE_LABEL, useAuth } from '../auth.jsx';
 import { useRealtime } from '../useRealtime.js';
 import { Avatar } from './ui.jsx';
 
@@ -36,32 +39,98 @@ function useTheme() {
   return [theme, setTheme];
 }
 
-export default function Layout() {
-  const { user, logout } = useAuth();
-  const [theme, setTheme] = useTheme();
-  useRealtime(Boolean(user));
+const orgInitials = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 
-  const links = (
-    <>
-      <NavLink to="/" end className="nav-link"><Kanban size={20} /><span>Board</span></NavLink>
-      <NavLink to="/calendar" className="nav-link"><CalendarDots size={20} /><span>Calendar</span></NavLink>
-      <NavLink to="/analytics" className="nav-link"><ChartLineUp size={20} /><span>Analytics</span></NavLink>
-      {user.role === 'ADMIN' && <NavLink to="/users" className="nav-link"><UsersThree size={20} /><span>Team</span></NavLink>}
-      <a href="/api/docs" target="_blank" rel="noreferrer" className="nav-link">
-        <FileCode size={20} /><span>API docs</span><ArrowSquareOut size={14} className="ext" aria-hidden="true" />
-      </a>
-    </>
-  );
+function OrgSwitcher() {
+  const { org, orgs, switchOrg } = useAuth();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const esc = (e) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', esc); };
+  }, [open]);
 
   return (
-    <div className="shell">
+    <div className="org-switch" ref={ref}>
+      <button type="button" className="org-current" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="org-mark" aria-hidden="true">{orgInitials(org?.name)}</span>
+        <span className="org-meta">
+          <span className="org-name">{org?.name}</span>
+          <span className="org-plan">{org?.plan?.toLowerCase()} plan · {ROLE_LABEL[org?.role]?.toLowerCase()}</span>
+        </span>
+        <CaretUpDown size={16} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="org-menu" role="menu" aria-label="Switch organization">
+          <div className="menu-label">Organizations</div>
+          {orgs.map((o) => (
+            <button key={o.id} type="button" role="menuitemradio" aria-checked={o.id === org?.id} className="menu-item"
+              onClick={() => { setOpen(false); switchOrg(o.id); navigate('/'); }}>
+              <span className="org-mark sm" aria-hidden="true">{orgInitials(o.name)}</span>
+              <span className="menu-text">{o.name}<small>{ROLE_LABEL[o.role]}</small></span>
+              {o.id === org?.id && <Check size={16} weight="bold" aria-hidden="true" />}
+            </button>
+          ))}
+          <div className="menu-sep" />
+          <button type="button" role="menuitem" className="menu-item" onClick={() => { setOpen(false); navigate('/onboarding?new=1'); }}>
+            <Plus size={16} aria-hidden="true" /><span className="menu-text">Create organization</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Layout() {
+  const { user, org, logout } = useAuth();
+  const [theme, setTheme] = useTheme();
+  const [drawer, setDrawer] = useState(false);
+  const location = useLocation();
+  useRealtime(org?.id);
+
+  useEffect(() => setDrawer(false), [location.pathname]);
+
+  return (
+    <div className={`shell ${drawer ? 'drawer-open' : ''}`}>
       <a href="#main" className="skip-link">Skip to content</a>
 
-      <aside className="sidebar" aria-label="Primary">
+      <header className="mobile-bar">
+        <button type="button" className="btn btn-ghost btn-icon" onClick={() => setDrawer(true)} aria-label="Open menu" aria-expanded={drawer} aria-controls="sidebar">
+          <List size={22} />
+        </button>
         <Logo />
-        <nav aria-label="Main navigation" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span className="mobile-org">{org?.name}</span>
+      </header>
+
+      {drawer && <div className="drawer-scrim" onClick={() => setDrawer(false)} aria-hidden="true" />}
+
+      <aside id="sidebar" className="sidebar" aria-label="Primary">
+        <div className="sidebar-top">
+          <Logo />
+          <button type="button" className="btn btn-ghost btn-icon drawer-close" onClick={() => setDrawer(false)} aria-label="Close menu"><X size={20} /></button>
+        </div>
+        <OrgSwitcher />
+
+        <nav aria-label="Main navigation" className="side-nav">
           <div className="nav-section">Workspace</div>
-          {links}
+          <NavLink to="/" end className="nav-link"><Kanban size={20} /><span>Board</span></NavLink>
+          <NavLink to="/calendar" className="nav-link"><CalendarDots size={20} /><span>Calendar</span></NavLink>
+          <NavLink to="/analytics" className="nav-link"><ChartLineUp size={20} /><span>Analytics</span></NavLink>
+          <NavLink to="/projects" className="nav-link"><FolderSimple size={20} /><span>Projects</span></NavLink>
+
+          <div className="nav-section">Organization</div>
+          <NavLink to="/team" className="nav-link"><UsersThree size={20} /><span>Team</span></NavLink>
+          {isAdmin(user) && <NavLink to="/audit" className="nav-link"><ClockCounterClockwise size={20} /><span>Audit log</span></NavLink>}
+          <NavLink to="/settings" className="nav-link"><GearSix size={20} /><span>Settings</span></NavLink>
+          <a href="/api/docs" target="_blank" rel="noreferrer" className="nav-link">
+            <FileCode size={20} /><span>API docs</span><ArrowSquareOut size={14} className="ext" aria-hidden="true" />
+          </a>
         </nav>
 
         <div className="sidebar-foot">
@@ -76,7 +145,7 @@ export default function Layout() {
             <Avatar user={user} className="avatar-lg" />
             <div className="who">
               <div className="name">{user.name}</div>
-              <span className={`badge role-${user.role}`}>{user.role.toLowerCase()}</span>
+              <div className="email">{user.email}</div>
             </div>
             <button type="button" className="btn btn-ghost btn-icon" onClick={logout} aria-label="Log out" title="Log out">
               <SignOut size={18} />
@@ -86,11 +155,6 @@ export default function Layout() {
       </aside>
 
       <div className="main">
-        <header className="mobile-bar">
-          <Logo />
-          <nav aria-label="Main navigation" style={{ display: 'flex', gap: 2 }}>{links}</nav>
-          <button type="button" className="btn btn-ghost btn-icon" onClick={logout} aria-label="Log out"><SignOut size={18} /></button>
-        </header>
         <main id="main" className="content" tabIndex={-1}>
           <Outlet />
         </main>
@@ -98,3 +162,4 @@ export default function Layout() {
     </div>
   );
 }
+

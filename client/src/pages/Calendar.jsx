@@ -7,6 +7,7 @@ import { PRIORITY_LABEL, STATUSES, STATUS_META } from '../constants.js';
 import TaskModal, { toInputDate } from '../components/TaskModal.jsx';
 import { Avatar, Modal, useToast } from '../components/ui.jsx';
 import { Legend } from '../components/charts.jsx';
+import ProjectSelect, { useProjectFilter } from '../components/ProjectSelect.jsx';
 
 const MAX_CHIPS = 3;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
@@ -31,9 +32,9 @@ export default function Calendar() {
   const [overDay, setOverDay] = useState(null);
 
   const days = useMemo(() => monthGrid(cursor), [cursor]);
-  const range = { from: days[0].toISOString(), to: addDays(days[41], 1).toISOString() };
-  const tasks = useQuery({ queryKey: ['tasks', 'calendar', range.from], queryFn: () => api(`/tasks/calendar${toQuery(range)}`), placeholderData: (p) => p });
-  const users = useQuery({ queryKey: ['users'], queryFn: () => api('/users'), enabled: canManage(user) });
+  const [projectId, setProjectId] = useProjectFilter();
+  const range = { from: days[0].toISOString(), to: addDays(days[41], 1).toISOString(), projectId };
+  const tasks = useQuery({ queryKey: ['tasks', 'calendar', range.from, projectId], queryFn: () => api(`/tasks/calendar${toQuery(range)}`), placeholderData: (p) => p });
 
   const byDay = useMemo(() => {
     const map = {};
@@ -89,7 +90,7 @@ export default function Calendar() {
           <h1>Calendar</h1>
           <p>Tasks by due date. Drag a task to reschedule it, or click a day to add one.</p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => setEditing({ defaults: { dueDate: toInputDate(new Date()) } })}>
+        <button type="button" className="btn btn-primary" onClick={() => setEditing({ defaults: { dueDate: toInputDate(new Date()), projectId } })}>
           <Plus size={18} weight="bold" /> New task
         </button>
       </div>
@@ -103,6 +104,7 @@ export default function Calendar() {
           </div>
           <div className="cal-nav">
             <Legend items={STATUSES.map((s) => ({ label: STATUS_META[s].label, color: STATUS_META[s].color }))} />
+            <ProjectSelect value={projectId} onChange={setProjectId} className="select select-sm" />
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => { const d = new Date(); setCursor(new Date(d.getFullYear(), d.getMonth(), 1)); }}>Today</button>
           </div>
         </div>
@@ -127,7 +129,7 @@ export default function Calendar() {
                     <div className="cal-cell-head">
                       <span className="cal-date num">{d.getDate()}</span>
                       <button type="button" className="cal-add" aria-label={`Add task on ${d.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}`}
-                        onClick={() => setEditing({ defaults: { dueDate: key } })}><Plus size={14} weight="bold" /></button>
+                        onClick={() => setEditing({ defaults: { dueDate: key, projectId } })}><Plus size={14} weight="bold" /></button>
                     </div>
                     {list.slice(0, MAX_CHIPS).map((t) => chip(t))}
                     {list.length > MAX_CHIPS && (
@@ -167,7 +169,7 @@ export default function Calendar() {
           </div>
           <div className="modal-foot">
             <span className="spacer" />
-            <button type="button" className="btn btn-primary" onClick={() => { const key = toInputDate(dayOpen); setDayOpen(null); setEditing({ defaults: { dueDate: key } }); }}>
+            <button type="button" className="btn btn-primary" onClick={() => { const key = toInputDate(dayOpen); setDayOpen(null); setEditing({ defaults: { dueDate: key, projectId } }); }}>
               <Plus size={18} weight="bold" /> Add task
             </button>
           </div>
@@ -175,7 +177,7 @@ export default function Calendar() {
       )}
 
       {editing && (
-        <TaskModal task={editing.task} defaults={editing.defaults} users={users.data}
+        <TaskModal task={editing.task} defaults={editing.defaults}
           onClose={() => setEditing(null)}
           onSaved={(msg) => { refresh(); toast(msg); setEditing(null); }} />
       )}

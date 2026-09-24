@@ -1,6 +1,7 @@
 import { CalendarBlank, DotsSixVertical, Flag, WarningCircle } from '@phosphor-icons/react';
 import { PRIORITY_LABEL, STATUS_META } from '../constants.js';
 import { Avatar } from './ui.jsx';
+import { taskKey } from '../hooks.js';
 
 const DAY = 86400_000;
 
@@ -28,9 +29,10 @@ export default function TaskCard({ task, index, onOpen, onDragStart, onDragEnd, 
       onDragStart={(e) => { e.dataTransfer.setData('text/plain', task.id); e.dataTransfer.effectAllowed = 'move'; onDragStart(task.id); }}
       onDragEnd={onDragEnd}
       onClick={() => onOpen(task)}
-      aria-label={`${task.title}. ${PRIORITY_LABEL[task.priority]} priority, ${STATUS_META[task.status].label}${due ? `, due ${due.label}` : ''}${task.assignee ? `, assigned to ${task.assignee.name}` : ''}. Open to edit.`}
+      aria-label={`${taskKey(task)} ${task.title}. ${PRIORITY_LABEL[task.priority]} priority, ${STATUS_META[task.status].label}${due ? `, due ${due.label}` : ''}${task.assignee ? `, assigned to ${task.assignee.name}` : ''}. Open to edit.`}
     >
       <div className="task-top">
+        <span className="task-key">{taskKey(task)}</span>
         <span className={`badge prio prio-${task.priority}`}>
           <Flag size={12} weight="fill" aria-hidden="true" />{PRIORITY_LABEL[task.priority]}
         </span>

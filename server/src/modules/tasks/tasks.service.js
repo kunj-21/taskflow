@@ -1,105 +1,123 @@
 import { prisma } from '../../config/db.js';
 import { ApiError } from '../../utils/errors.js';
 import { cached, namespaceVersion, invalidateNamespace } from '../../utils/cache.js';
+import { isManager } from '../../middleware/auth.js';
 import { emitTaskEvent } from '../../sockets/index.js';
 import { scheduleTaskReminder, cancelTaskReminder } from '../../jobs/queues.js';
 
-const CACHE_NS = 'tasks';
-const isManager = (user) => user.role === 'ADMIN' || user.role === 'MANAGER';
+// Every function takes a request context { user, org, membership } from requireOrg.
+// Every query is filtered by ctx.org.id: that filter is the tenant boundary.
+
+const ns = (ctx) => `tasks:${ctx.org.id}`;
+const scopeKey = (ctx) => (isManager(ctx.membership) ? 'all' : ctx.user.id);
 
 const taskInclude = {
   assignee: { select: { id: true, name: true, email: true, avatarUrl: true } },
   creator: { select: { id: true, name: true, email: true, avatarUrl: true } },
+  project: { select: { id: true, name: true, key: true } },
 };
 
-// Members only see tasks they created or are assigned to; managers/admins see everything.
-const visibilityFilter = (user) =>
-  isManager(user) ? {} : { OR: [{ creatorId: user.id }, { assigneeId: user.id }] };
+// Members only see tasks they created or are assigned to; managers and above see the whole org.
+function baseWhere(ctx) {
+  const where = { orgId: ctx.org.id };
+  if (!isManager(ctx.membership)) where.OR = [{ creatorId: ctx.user.id }, { assigneeId: ctx.user.id }];
+  return where;
+}
 
-export async function listTasks(user, q) {
+async function cacheKey(ctx, ...parts) {
+  const version = await namespaceVersion(ns(ctx));
+  return `cache:${ns(ctx)}:${version}:${scopeKey(ctx)}:${parts.join(':')}`;
+}
+
+export async function listTasks(ctx, q) {
   const where = {
     AND: [
-      visibilityFilter(user),
+      baseWhere(ctx),
+      q.projectId ? { projectId: q.projectId } : {},
       q.status ? { status: q.status } : {},
       q.priority ? { priority: q.priority } : {},
-      q.assigneeId ? { assigneeId: q.assigneeId === 'me' ? user.id : q.assigneeId } : {},
+      q.assigneeId ? { assigneeId: q.assigneeId === 'me' ? ctx.user.id : q.assigneeId } : {},
       q.search ? { OR: [{ title: { contains: q.search, mode: 'insensitive' } }, { description: { contains: q.search, mode: 'insensitive' } }] } : {},
       q.dueBefore ? { dueDate: { lte: q.dueBefore } } : {},
       q.dueAfter ? { dueDate: { gte: q.dueAfter } } : {},
     ],
   };
 
-  // Cache key includes namespace version + the viewer's scope + normalized query.
-  const version = await namespaceVersion(CACHE_NS);
-  const scope = isManager(user) ? 'all' : user.id;
-  const key = `cache:${CACHE_NS}:${version}:list:${scope}:${JSON.stringify(q)}`;
-
-  return cached(key, async () => {
+  return cached(await cacheKey(ctx, 'list', JSON.stringify(q)), async () => {
     const [items, total] = await prisma.$transaction([
-      prisma.task.findMany({
-        where,
-        include: taskInclude,
-        orderBy: { [q.sortBy]: q.order },
-        skip: (q.page - 1) * q.limit,
-        take: q.limit,
-      }),
+      prisma.task.findMany({ where, include: taskInclude, orderBy: [{ [q.sortBy]: q.order }, { id: 'asc' }], skip: (q.page - 1) * q.limit, take: q.limit }),
       prisma.task.count({ where }),
     ]);
     return { items, page: q.page, limit: q.limit, total, totalPages: Math.ceil(total / q.limit) };
   });
 }
 
-async function findVisibleTask(user, id) {
-  const task = await prisma.task.findFirst({ where: { id, ...visibilityFilter(user) }, include: taskInclude });
+async function findVisibleTask(ctx, id) {
+  const task = await prisma.task.findFirst({ where: { id, ...baseWhere(ctx) }, include: taskInclude });
   if (!task) throw ApiError.notFound('Task not found');
   return task;
 }
 
 export const getTask = findVisibleTask;
 
-async function assertAssignable(user, assigneeId) {
+async function assertAssignable(ctx, assigneeId) {
   if (!assigneeId) return;
-  if (!isManager(user) && assigneeId !== user.id) {
-    throw ApiError.forbidden('Only managers and admins can assign tasks to other users');
+  if (!isManager(ctx.membership) && assigneeId !== ctx.user.id) {
+    throw ApiError.forbidden('Only managers and above can assign tasks to other people');
   }
-  const exists = await prisma.user.findUnique({ where: { id: assigneeId }, select: { id: true } });
-  if (!exists) throw ApiError.badRequest('Assignee does not exist');
+  const member = await prisma.membership.findUnique({ where: { userId_orgId: { userId: assigneeId, orgId: ctx.org.id } }, select: { id: true } });
+  if (!member) throw ApiError.badRequest('Assignee is not a member of this organization');
 }
 
-async function afterWrite(event, task, extraUserIds) {
-  await invalidateNamespace(CACHE_NS);
-  emitTaskEvent(event, task, extraUserIds);
+async function assertProject(ctx, projectId) {
+  const project = await prisma.project.findFirst({ where: { id: projectId, orgId: ctx.org.id }, select: { id: true, archivedAt: true } });
+  if (!project) throw ApiError.badRequest('Project does not exist in this organization');
+  if (project.archivedAt) throw ApiError.badRequest('Project is archived');
 }
 
-export async function createTask(user, data) {
-  const assigneeId = data.assigneeId === undefined ? user.id : data.assigneeId;
-  await assertAssignable(user, assigneeId);
-  const task = await prisma.task.create({
-    data: { ...data, assigneeId, creatorId: user.id, completedAt: data.status === 'DONE' ? new Date() : null },
-    include: taskInclude,
+async function afterWrite(ctx, event, task, extraUserIds) {
+  await invalidateNamespace(ns(ctx));
+  emitTaskEvent(ctx.org.id, event, task, extraUserIds);
+}
+
+export async function createTask(ctx, data) {
+  const assigneeId = data.assigneeId === undefined ? ctx.user.id : data.assigneeId;
+  await Promise.all([assertAssignable(ctx, assigneeId), assertProject(ctx, data.projectId)]);
+
+  // Per-project sequential numbers (WEB-1, WEB-2...). The counter increment and insert share a
+  // transaction, and the row lock on the project serializes concurrent creates.
+  const task = await prisma.$transaction(async (tx) => {
+    const { taskCounter } = await tx.project.update({ where: { id: data.projectId }, data: { taskCounter: { increment: 1 } }, select: { taskCounter: true } });
+    return tx.task.create({
+      data: {
+        ...data, assigneeId, number: taskCounter, orgId: ctx.org.id, creatorId: ctx.user.id,
+        completedAt: data.status === 'DONE' ? new Date() : null,
+      },
+      include: taskInclude,
+    });
   });
   await scheduleTaskReminder(task);
-  await afterWrite('task:created', task);
+  await afterWrite(ctx, 'task:created', task);
   return task;
 }
 
-export async function updateTask(user, id, data) {
-  const existing = await findVisibleTask(user, id);
+export async function updateTask(ctx, id, data) {
+  const existing = await findVisibleTask(ctx, id);
 
-  if (!isManager(user)) {
-    // Members may edit tasks they created, but on tasks assigned to them by someone else
-    // they can only move the status.
+  if (!isManager(ctx.membership)) {
+    // Members may edit tasks they created; on tasks assigned by someone else they only move status.
     const onlyStatus = Object.keys(data).every((k) => k === 'status');
-    if (existing.creatorId !== user.id && !onlyStatus) {
+    if (existing.creatorId !== ctx.user.id && !onlyStatus) {
       throw ApiError.forbidden('You can only change the status of tasks assigned to you');
     }
   }
-  if (data.assigneeId !== undefined && data.assigneeId !== existing.assigneeId) {
-    await assertAssignable(user, data.assigneeId);
+  if (data.assigneeId !== undefined && data.assigneeId !== existing.assigneeId) await assertAssignable(ctx, data.assigneeId);
+  if (data.projectId && data.projectId !== existing.projectId) {
+    // Moving projects would break the task's number, so it isn't supported; recreate instead.
+    throw ApiError.badRequest('Tasks cannot be moved between projects');
   }
 
   const dueChanged = data.dueDate !== undefined && String(data.dueDate) !== String(existing.dueDate);
-  // completedAt tracks the moment a task reached DONE; reopening clears it.
   const statusChanged = data.status !== undefined && data.status !== existing.status;
   const completion = statusChanged ? { completedAt: data.status === 'DONE' ? new Date() : null } : {};
   const task = await prisma.task.update({
@@ -108,48 +126,42 @@ export async function updateTask(user, id, data) {
     include: taskInclude,
   });
   await scheduleTaskReminder(task);
-  await afterWrite('task:updated', task, [existing.assigneeId]);
+  await afterWrite(ctx, 'task:updated', task, [existing.assigneeId]);
   return task;
 }
 
-export async function deleteTask(user, id) {
-  const existing = await findVisibleTask(user, id);
-  if (!isManager(user) && existing.creatorId !== user.id) {
+export async function deleteTask(ctx, id) {
+  const existing = await findVisibleTask(ctx, id);
+  if (!isManager(ctx.membership) && existing.creatorId !== ctx.user.id) {
     throw ApiError.forbidden('Only the creator or a manager can delete this task');
   }
   await prisma.task.delete({ where: { id } });
   await cancelTaskReminder(id);
-  await afterWrite('task:deleted', { id, creatorId: existing.creatorId, assigneeId: existing.assigneeId });
+  await afterWrite(ctx, 'task:deleted', { id, creatorId: existing.creatorId, assigneeId: existing.assigneeId });
+  return existing;
 }
 
-export async function getStats(user) {
-  const version = await namespaceVersion(CACHE_NS);
-  const scope = isManager(user) ? 'all' : user.id;
+const withProject = (where, projectId) => (projectId ? { ...where, projectId } : where);
 
-  return cached(`cache:${CACHE_NS}:${version}:stats:${scope}`, async () => {
-    const where = visibilityFilter(user);
+export async function getStats(ctx, { projectId } = {}) {
+  return cached(await cacheKey(ctx, 'stats', projectId || '-'), async () => {
+    const where = withProject(baseWhere(ctx), projectId);
     const [byStatus, byPriority, overdue, dueThisWeek] = await Promise.all([
       prisma.task.groupBy({ by: ['status'], where, _count: true }),
       prisma.task.groupBy({ by: ['priority'], where, _count: true }),
       prisma.task.count({ where: { ...where, status: { not: 'DONE' }, dueDate: { lt: new Date() } } }),
-      prisma.task.count({
-        where: { ...where, status: { not: 'DONE' }, dueDate: { gte: new Date(), lte: new Date(Date.now() + 7 * 86400_000) } },
-      }),
+      prisma.task.count({ where: { ...where, status: { not: 'DONE' }, dueDate: { gte: new Date(), lte: new Date(Date.now() + 7 * 86400_000) } } }),
     ]);
     const toMap = (rows, k) => Object.fromEntries(rows.map((r) => [r[k], r._count]));
     return { byStatus: toMap(byStatus, 'status'), byPriority: toMap(byPriority, 'priority'), overdue, dueThisWeek };
   });
 }
 
-// Tasks due within [from, to) for the calendar. Bounded range (validated at the route) keeps it small.
-export async function getCalendar(user, { from, to }) {
-  const version = await namespaceVersion(CACHE_NS);
-  const scope = isManager(user) ? 'all' : user.id;
-  const key = `cache:${CACHE_NS}:${version}:calendar:${scope}:${from.toISOString()}:${to.toISOString()}`;
-
-  return cached(key, () =>
+// Tasks due within [from, to) for the calendar. The route caps the range.
+export async function getCalendar(ctx, { from, to, projectId }) {
+  return cached(await cacheKey(ctx, 'calendar', from.toISOString(), to.toISOString(), projectId || '-'), () =>
     prisma.task.findMany({
-      where: { AND: [visibilityFilter(user), { dueDate: { gte: from, lt: to } }] },
+      where: { ...withProject(baseWhere(ctx), projectId), dueDate: { gte: from, lt: to } },
       include: taskInclude,
       orderBy: [{ dueDate: 'asc' }, { priority: 'desc' }],
       take: 500,
@@ -161,12 +173,9 @@ const DAY_MS = 86400_000;
 const dayKey = (d) => d.toISOString().slice(0, 10);
 
 // Aggregates for the analytics page. Daily buckets are UTC days.
-export async function getAnalytics(user, { days }) {
-  const version = await namespaceVersion(CACHE_NS);
-  const scope = isManager(user) ? 'all' : user.id;
-
-  return cached(`cache:${CACHE_NS}:${version}:analytics:${scope}:${days}`, async () => {
-    const where = visibilityFilter(user);
+export async function getAnalytics(ctx, { days, projectId }) {
+  return cached(await cacheKey(ctx, 'analytics', days, projectId || '-'), async () => {
+    const where = withProject(baseWhere(ctx), projectId);
     const today = new Date(`${dayKey(new Date())}T00:00:00.000Z`);
     const since = new Date(today.getTime() - (days - 1) * DAY_MS);
 

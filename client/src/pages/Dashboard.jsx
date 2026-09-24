@@ -6,6 +6,8 @@ import { canManage, useAuth } from '../auth.jsx';
 import { PRIORITIES, PRIORITY_LABEL, STATUSES, STATUS_META } from '../constants.js';
 import TaskModal from '../components/TaskModal.jsx';
 import TaskCard from '../components/TaskCard.jsx';
+import ProjectSelect, { useProjectFilter } from '../components/ProjectSelect.jsx';
+import { useMembers } from '../hooks.js';
 import { useDebounced, useToast } from '../components/ui.jsx';
 
 function greeting() {
@@ -21,17 +23,18 @@ export default function Dashboard() {
 
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ priority: '', assigneeId: '', sort: 'dueDate:asc' });
+  const [projectId, setProjectId] = useProjectFilter();
   const [editing, setEditing] = useState(null); // null | { task } | { defaults }
   const [draggingId, setDraggingId] = useState(null);
   const [overCol, setOverCol] = useState(null);
   const debouncedSearch = useDebounced(search.trim());
 
   const [sortBy, order] = filters.sort.split(':');
-  const params = { search: debouncedSearch, priority: filters.priority, assigneeId: filters.assigneeId, sortBy, order, limit: 100 };
+  const params = { projectId, search: debouncedSearch, priority: filters.priority, assigneeId: filters.assigneeId, sortBy, order, limit: 100 };
 
-  const stats = useQuery({ queryKey: ['stats'], queryFn: () => api('/tasks/stats') });
+  const stats = useQuery({ queryKey: ['stats', projectId], queryFn: () => api(`/tasks/stats${toQuery({ projectId })}`) });
   const tasks = useQuery({ queryKey: ['tasks', params], queryFn: () => api(`/tasks${toQuery(params)}`), placeholderData: (prev) => prev });
-  const users = useQuery({ queryKey: ['users'], queryFn: () => api('/users'), enabled: manager });
+  const users = useMembers(manager);
 
   const refresh = () => { qc.invalidateQueries({ queryKey: ['tasks'] }); qc.invalidateQueries({ queryKey: ['stats'] }); };
 
@@ -60,7 +63,7 @@ export default function Dashboard() {
   const total = s ? Object.values(s.byStatus).reduce((a, b) => a + b, 0) : 0;
   const done = s?.byStatus.DONE || 0;
   const pct = total ? Math.round((done / total) * 100) : 0;
-  const hasFilters = search || filters.priority || filters.assigneeId;
+  const hasFilters = search || filters.priority || filters.assigneeId || projectId;
   const firstName = user.name.split(' ')[0];
 
   function drop(status) {
@@ -77,7 +80,7 @@ export default function Dashboard() {
           <h1>{greeting()}, {firstName}</h1>
           <p>{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })} · {manager ? 'Here’s how your team is doing.' : 'Here’s what’s on your plate.'}</p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={() => setEditing({ defaults: {} })}>
+        <button type="button" className="btn btn-primary" onClick={() => setEditing({ defaults: { projectId } })}>
           <Plus size={18} weight="bold" /> New task
         </button>
       </div>
@@ -103,6 +106,7 @@ export default function Dashboard() {
       </section>
 
       <div className="toolbar" role="search">
+        <ProjectSelect value={projectId} onChange={setProjectId} />
         <div className="input-wrap search">
           <MagnifyingGlass size={18} aria-hidden="true" />
           <input className="input" type="search" placeholder="Search tasks" aria-label="Search tasks" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -123,7 +127,7 @@ export default function Dashboard() {
           <option value="updatedAt:desc">Recently updated</option>
         </select>
         {hasFilters && (
-          <button type="button" className="btn btn-ghost" onClick={() => { setSearch(''); setFilters({ ...filters, priority: '', assigneeId: '' }); }}>Clear filters</button>
+          <button type="button" className="btn btn-ghost" onClick={() => { setSearch(''); setFilters({ ...filters, priority: '', assigneeId: '' }); setProjectId(''); }}>Clear filters</button>
         )}
       </div>
 
@@ -147,7 +151,7 @@ export default function Dashboard() {
                 <span className="status-dot" style={{ '--sc': meta.color }} aria-hidden="true" />
                 <h2 id={`col-${status}`}>{meta.label}</h2>
                 <span className="count num" aria-label={`${items.length} tasks`}>{items.length}</span>
-                <button type="button" className="btn btn-ghost btn-icon" aria-label={`Add task to ${meta.label}`} title={`Add to ${meta.label}`} onClick={() => setEditing({ defaults: { status } })}>
+                <button type="button" className="btn btn-ghost btn-icon" aria-label={`Add task to ${meta.label}`} title={`Add to ${meta.label}`} onClick={() => setEditing({ defaults: { status, projectId } })}>
                   <Plus size={16} weight="bold" />
                 </button>
               </div>
@@ -176,7 +180,6 @@ export default function Dashboard() {
         <TaskModal
           task={editing.task}
           defaults={editing.defaults}
-          users={users.data}
           onClose={() => setEditing(null)}
           onSaved={(msg) => { refresh(); toast(msg); setEditing(null); }}
         />
