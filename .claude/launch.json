@@ -1,0 +1,8 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "api", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "server", "run", "dev"], "port": 4000 },
+    { "name": "worker", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "server", "run", "worker"], "port": 4001 },
+    { "name": "client", "runtimeExecutable": "npm", "runtimeArgs": ["--prefix", "client", "run", "dev"], "port": 5173 }
+  ]
+}
