@@ -7,6 +7,8 @@ import Login from './pages/Login.jsx';
 import AuthCallback from './pages/AuthCallback.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Users from './pages/Users.jsx';
+import Calendar from './pages/Calendar.jsx';
+import Analytics from './pages/Analytics.jsx';
 import Layout from './components/Layout.jsx';
 import { Spinner, ToastProvider } from './components/ui.jsx';
 import './styles.css';
@@ -32,6 +34,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/auth/callback" element={<AuthCallback />} />
               <Route element={<Protected><Layout /></Protected>}>
                 <Route index element={<Dashboard />} />
+                <Route path="calendar" element={<Calendar />} />
+                <Route path="analytics" element={<Analytics />} />
                 <Route path="users" element={<Protected roles={['ADMIN']}><Users /></Protected>} />
               </Route>
               <Route path="*" element={<Navigate to="/" replace />} />

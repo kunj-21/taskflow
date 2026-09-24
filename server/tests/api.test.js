@@ -95,6 +95,52 @@ describe('tasks + RBAC', () => {
     expect(after).toBe(before + 1);
   });
 
+  it('stamps completedAt when a task reaches DONE and clears it on reopen', async () => {
+    const t = (await request(app).post('/api/v1/tasks').set(as(admin)).send({ title: 'Finish me' })).body;
+    expect(t.completedAt).toBeNull();
+    const done = await request(app).patch(`/api/v1/tasks/${t.id}`).set(as(admin)).send({ status: 'DONE' });
+    expect(done.body.completedAt).not.toBeNull();
+    const reopened = await request(app).patch(`/api/v1/tasks/${t.id}`).set(as(admin)).send({ status: 'IN_PROGRESS' });
+    expect(reopened.body.completedAt).toBeNull();
+  });
+
+  it('returns tasks due within a calendar range, scoped by visibility', async () => {
+    const due = new Date(Date.UTC(2031, 4, 15, 12));
+    await request(app).post('/api/v1/tasks').set(as(admin)).send({ title: 'Admin-only calendar task', dueDate: due });
+    await request(app).post('/api/v1/tasks').set(as(member)).send({ title: 'Member calendar task', dueDate: due });
+    const range = '?from=2031-05-01T00:00:00Z&to=2031-06-01T00:00:00Z';
+
+    const adminView = await request(app).get(`/api/v1/tasks/calendar${range}`).set(as(admin));
+    expect(adminView.status).toBe(200);
+    expect(adminView.body.map((t) => t.title).sort()).toEqual(['Admin-only calendar task', 'Member calendar task']);
+
+    const otherView = await request(app).get(`/api/v1/tasks/calendar${range}`).set(as(other));
+    expect(otherView.body).toEqual([]);
+
+    const outside = await request(app).get('/api/v1/tasks/calendar?from=2031-06-01T00:00:00Z&to=2031-07-01T00:00:00Z').set(as(admin));
+    expect(outside.body).toEqual([]);
+  });
+
+  it('rejects oversized or inverted calendar ranges', async () => {
+    const tooBig = await request(app).get('/api/v1/tasks/calendar?from=2031-01-01&to=2031-06-01').set(as(admin));
+    expect(tooBig.status).toBe(400);
+    const inverted = await request(app).get('/api/v1/tasks/calendar?from=2031-06-01&to=2031-05-01').set(as(admin));
+    expect(inverted.status).toBe(400);
+  });
+
+  it('builds a dense daily analytics series with workload and priority breakdowns', async () => {
+    const res = await request(app).get('/api/v1/tasks/analytics?days=7').set(as(admin));
+    expect(res.status).toBe(200);
+    expect(res.body.series).toHaveLength(7);
+    const sum = (k) => res.body.series.reduce((a, d) => a + d[k], 0);
+    expect(sum('created')).toBe(res.body.totals.created);
+    expect(sum('completed')).toBe(res.body.totals.completed);
+    expect(res.body.totals.completed).toBeGreaterThanOrEqual(1); // 'Ship it' was completed above
+    const memberRow = res.body.workload.find((w) => w.user?.id === member.user.id);
+    expect(memberRow.open).toBe(memberRow.TODO + memberRow.IN_PROGRESS + memberRow.REVIEW);
+    expect((await request(app).get('/api/v1/tasks/analytics?days=12').set(as(admin))).status).toBe(400);
+  });
+
   it('restricts role changes to admins', async () => {
     const res = await request(app).patch(`/api/v1/users/${other.user.id}/role`).set(as(member)).send({ role: 'ADMIN' });
     expect(res.status).toBe(403);

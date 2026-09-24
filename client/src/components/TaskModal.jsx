@@ -6,7 +6,7 @@ import { canManage, useAuth } from '../auth.jsx';
 import { PRIORITIES, PRIORITY_LABEL, STATUSES, STATUS_META } from '../constants.js';
 import { Avatar, Modal, Spinner } from './ui.jsx';
 
-const toInputDate = (d) => {
+export const toInputDate = (d) => {
   if (!d) return '';
   const x = new Date(d);
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
@@ -25,7 +25,7 @@ export default function TaskModal({ task, defaults = {}, users, onClose, onSaved
     description: task?.description || '',
     status: task?.status || defaults.status || 'TODO',
     priority: task?.priority || 'MEDIUM',
-    dueDate: toInputDate(task?.dueDate),
+    dueDate: task ? toInputDate(task.dueDate) : defaults.dueDate || '',
     assigneeId: task ? task.assigneeId ?? '' : user.id,
   });
   const [confirmDelete, setConfirmDelete] = useState(false);

@@ -32,3 +32,13 @@ export const listTasksSchema = z.object({
 });
 
 export const idParam = z.object({ id: z.string().min(1) });
+
+const MAX_CALENDAR_DAYS = 62;
+export const calendarSchema = z
+  .object({ from: z.coerce.date(), to: z.coerce.date() })
+  .refine((v) => v.to > v.from, { message: '`to` must be after `from`', path: ['to'] })
+  .refine((v) => v.to - v.from <= MAX_CALENDAR_DAYS * 86400_000, { message: `Range can be at most ${MAX_CALENDAR_DAYS} days`, path: ['to'] });
+
+export const analyticsSchema = z.object({
+  days: z.coerce.number().int().refine((d) => [7, 30, 90].includes(d), 'days must be 7, 30 or 90').default(30),
+});

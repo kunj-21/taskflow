@@ -51,6 +51,7 @@ model Task {
   priority    Priority   @default(MEDIUM)
   dueDate     DateTime?
   reminderSentAt DateTime?
+  completedAt DateTime?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
@@ -62,6 +63,7 @@ model Task {
   @@index([assigneeId, status])
   @@index([dueDate])
   @@index([createdAt])
+  @@index([completedAt])
 }
 
 model RefreshToken {

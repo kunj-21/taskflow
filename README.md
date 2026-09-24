@@ -18,6 +18,8 @@ A full-stack task management platform built to production standards: role-based 
 | **Observability** | Winston structured logs (JSON in prod), Morgan HTTP logs with request IDs, `/health` and `/ready` probes. |
 | **Docs & tests** | OpenAPI 3 / Swagger UI at `/api/docs`. Vitest unit tests + Supertest integration tests against real Postgres & Redis. GitHub Actions CI. |
 | **Frontend** | Kanban board with drag-and-drop, stats cards, filters, task editor, admin user management, dark mode. |
+| **Calendar** | Month grid by due date with drag-to-reschedule, click-a-day to add, and a mobile agenda view. Backed by `GET /tasks/calendar` (bounded ranges). |
+| **Analytics** | Created vs. completed trend, workload by person, open tasks by priority, and cycle time. `completedAt` is tracked on every status change. Colour-blind-safe palette checked with a validator; every chart has a table view. |
 
 ## Architecture
 
@@ -96,6 +98,8 @@ Interactive docs at **http://localhost:4000/api/docs**. Main endpoints (all unde
 | GET | `/auth/me` | authenticated |
 | GET/POST | `/tasks` | authenticated (scoped by role) |
 | GET | `/tasks/stats` | authenticated |
+| GET | `/tasks/calendar?from&to` | authenticated (scoped by role, max 62 days) |
+| GET | `/tasks/analytics?days=7\|30\|90` | authenticated (scoped by role) |
 | GET/PATCH/DELETE | `/tasks/:id` | creator / assignee / manager |
 | GET | `/users` | authenticated |
 | PATCH | `/users/:id/role`, DELETE `/users/:id` | admin |
@@ -119,7 +123,7 @@ infra/nginx/         load balancer + static hosting
 
 ## Roadmap
 
-- [ ] Calendar view and richer analytics charts
+- [x] Calendar view and analytics charts
 - [ ] Deploy (Vercel for client, Render/Railway/Fly for API + worker)
 - [ ] Postgres read replicas for list/stats queries
 - [ ] Prometheus metrics + Grafana dashboard
